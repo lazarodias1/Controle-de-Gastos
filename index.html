@@ -203,6 +203,9 @@ const CATEGORIES = [
   { id: "coffee", label: "Café", emoji: "☕", color: "#8B6A4A" },
   { id: "insurance", label: "Seguro", emoji: "🛡️", color: "#3E7C82" },
   { id: "phone", label: "Telefone", emoji: "📱", color: "#7A5C8B" },
+  { id: "courses", label: "Cursos", emoji: "📚", color: "#6A6F9C" },
+  { id: "apps", label: "Apps", emoji: "💻", color: "#5B8191" },
+  { id: "gym", label: "Academia", emoji: "🏋️", color: "#7D6A50" },
   { id: "car", label: "Carro", emoji: "🚗", color: "#9C7A2E" },
   { id: "other", label: "Outros", emoji: "✳️", color: "#8A8570" },
 ];
@@ -368,19 +371,36 @@ function ExpenseTracker() {
 
     return periods.map((p) => {
       let income = 0;
-      let expense = 0;
+      let variableExpense = 0;
 
       transactions.forEach((t) => {
         const d = new Date(t.date + "T00:00:00");
         if (d >= p.start && d < p.end) {
           if (t.type === "income") income += Number(t.amount);
-          else expense += Number(t.amount);
+          else variableExpense += Number(t.amount);
         }
       });
 
-      return { label: p.label, Receita: income, Despesa: expense, start: p.start, end: p.end };
+      const annualFixed = fixedExpenses.reduce((sum, item) => sum + fixedToAnnual(item.amount, item.frequency), 0);
+      let fixedExpense = 0;
+
+      if (periodType === "week") fixedExpense = annualFixed / 52;
+      else if (periodType === "biweek") fixedExpense = annualFixed / 26;
+      else if (periodType === "month") fixedExpense = annualFixed / 12;
+      else if (periodType === "quarter") fixedExpense = annualFixed / 4;
+      else fixedExpense = annualFixed;
+
+      return {
+        label: p.label,
+        Receita: income,
+        Variavel: variableExpense,
+        Fixa: fixedExpense,
+        Despesa: variableExpense + fixedExpense,
+        start: p.start,
+        end: p.end
+      };
     });
-  }, [transactions, periodType]);
+  }, [transactions, fixedExpenses, periodType]);
 
   const current = chartData[chartData.length - 1] || { Receita: 0, Despesa: 0, label: "" };
   const currentSaved = current.Receita - current.Despesa;
@@ -400,9 +420,21 @@ function ExpenseTracker() {
       }
     });
 
+    fixedExpenses.forEach((item) => {
+      const annual = fixedToAnnual(item.amount, item.frequency);
+      let periodValue = 0;
+      if (periodType === "week") periodValue = annual / 52;
+      else if (periodType === "biweek") periodValue = annual / 26;
+      else if (periodType === "month") periodValue = annual / 12;
+      else if (periodType === "quarter") periodValue = annual / 4;
+      else periodValue = annual;
+
+      sums[item.categoryId] = (sums[item.categoryId] || 0) + periodValue;
+    });
+
     const max = Math.max(1, ...Object.values(sums));
     return CATEGORIES.map((c) => ({ ...c, value: sums[c.id], pct: (sums[c.id] / max) * 100 }));
-  }, [transactions, chartData]);
+  }, [transactions, fixedExpenses, chartData, periodType]);
 
   const allTime = useMemo(() => {
     let income = 0;
@@ -430,10 +462,20 @@ function ExpenseTracker() {
   const fixedChartMax = Math.max(1, fixedTotals.weekly, fixedTotals.monthly, fixedTotals.annual);
 
   const recent = useMemo(() => {
-    return [...transactions].sort((a,b) => (a.date < b.date ? 1 : -1)).slice(0, 8);
-  }, [transactions]);
+    const regular = transactions.map((t) => ({ ...t, source: "regular" }));
+    const fixed = fixedExpenses.map((item) => ({
+      ...item,
+      source: "fixed",
+      type: "expense",
+      date: "9999-12-31"
+    }));
 
-  const maxChart = Math.max(1, ...chartData.map(d => Math.max(d.Receita, d.Despesa)));
+    return [...fixed, ...regular]
+      .sort((a,b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 10);
+  }, [transactions, fixedExpenses]);
+
+  const maxChart = Math.max(1, ...chartData.map(d => Math.max(d.Receita, d.Variavel, d.Fixa)));
 
   function resetForm() {
     setFormType("expense");
@@ -627,7 +669,7 @@ function ExpenseTracker() {
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">Despesa variável da {periodNoun}</div>
+          <div className="stat-label">Despesa total da {periodNoun}</div>
           <div className="stat-value mono-font">{brl(current.Despesa)}</div>
         </div>
 
@@ -729,11 +771,45 @@ function ExpenseTracker() {
       </div>
 
       <div className="card">
+        <h2 className="card-title ledger-font">Despesas variáveis cadastradas</h2>
+
+        {transactions.filter((t) => t.type === "expense").length === 0 ? (
+          <p className="empty-note">Ainda não há despesas variáveis cadastradas.</p>
+        ) : (
+          [...transactions]
+            .filter((t) => t.type === "expense")
+            .sort((a,b) => (a.date < b.date ? 1 : -1))
+            .map((t) => {
+              const cat = CATEGORIES.find((c) => c.id === t.categoryId);
+              return (
+                <div className="tx-row" key={t.id}>
+                  <div className="tx-icon" style={{background: (cat?.color || COLORS.brick) + "20"}}>
+                    {cat?.emoji || "✳️"}
+                  </div>
+                  <div className="tx-body">
+                    <div className="tx-name">
+                      {cat?.label || "Despesa variável"}
+                      {t.note ? <span className="tx-note"> · {t.note}</span> : null}
+                    </div>
+                    <div className="tx-date">{fmtDateShort(t.date)}</div>
+                  </div>
+                  <div className="tx-amount mono-font" style={{color: COLORS.brick}}>
+                    −{brl(t.amount)}
+                  </div>
+                  <button className="del-btn" onClick={() => handleDelete(t.id)} aria-label="Excluir despesa variável">✕</button>
+                </div>
+              );
+            })
+        )}
+      </div>
+
+      <div className="card">
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
-          <h2 className="card-title ledger-font">Receita x Despesa variável</h2>
+          <h2 className="card-title ledger-font">Receita x Despesas</h2>
           <div className="chart-legend">
             <span><span className="legend-dot" style={{background: COLORS.sage}}></span>Receita</span>
-            <span><span className="legend-dot" style={{background: COLORS.brick}}></span>Despesa</span>
+            <span><span className="legend-dot" style={{background: COLORS.brick}}></span>Variável</span>
+            <span><span className="legend-dot" style={{background: COLORS.blue}}></span>Fixa</span>
           </div>
         </div>
 
@@ -748,8 +824,13 @@ function ExpenseTracker() {
                 ></div>
                 <div
                   className="chart-bar"
-                  title={`Despesa: ${brl(d.Despesa)}`}
-                  style={{height: Math.max(2, (d.Despesa/maxChart)*160), background: COLORS.brick}}
+                  title={`Despesa variável: ${brl(d.Variavel)}`}
+                  style={{height: Math.max(2, (d.Variavel/maxChart)*160), background: COLORS.brick}}
+                ></div>
+                <div
+                  className="chart-bar"
+                  title={`Despesa fixa estimada: ${brl(d.Fixa)}`}
+                  style={{height: Math.max(2, (d.Fixa/maxChart)*160), background: COLORS.blue}}
                 ></div>
               </div>
               <div className="chart-col-label">{d.label}</div>
@@ -762,7 +843,7 @@ function ExpenseTracker() {
         <h2 className="card-title ledger-font">Por categoria — {current.label || `${periodNoun} atual`}</h2>
 
         {categoryBreakdown.every((c) => c.value === 0) ? (
-          <p className="empty-note">Nenhuma despesa variável lançada neste período ainda.</p>
+          <p className="empty-note">Nenhuma despesa lançada neste período ainda.</p>
         ) : (
           categoryBreakdown.map((c) => (
             <div className="cat-row" key={c.id}>
@@ -785,27 +866,34 @@ function ExpenseTracker() {
         <h2 className="card-title ledger-font">Últimos lançamentos</h2>
 
         {recent.length === 0 ? (
-          <p className="empty-note">Ainda não há lançamentos variáveis ou receitas. Toque em "+ Lançar" para começar.</p>
+          <p className="empty-note">Ainda não há lançamentos. Toque em "+ Lançar" para começar.</p>
         ) : (
           recent.map((t) => {
             const cat = t.type === "expense" ? CATEGORIES.find((c) => c.id === t.categoryId) : null;
             const emoji = cat ? cat.emoji : "💰";
-            const color = cat ? cat.color : COLORS.sage;
+            const color = t.source === "fixed" ? COLORS.blue : (cat ? cat.color : COLORS.sage);
 
             return (
-              <div className="tx-row" key={t.id}>
+              <div className="tx-row" key={`${t.source}-${t.id}`}>
                 <div className="tx-icon" style={{background: color + "20"}}>{emoji}</div>
                 <div className="tx-body">
                   <div className="tx-name">
                     {cat ? cat.label : "Receita"}
+                    {t.source === "fixed" ? <span className="badge">Fixa</span> : null}
                     {t.note ? <span className="tx-note"> · {t.note}</span> : null}
                   </div>
-                  <div className="tx-date">{fmtDateShort(t.date)}</div>
+                  <div className="tx-date">
+                    {t.source === "fixed" ? `${frequencyLabel(t.frequency)} · ${brl(fixedToAnnual(t.amount, t.frequency)/12)}/mês` : fmtDateShort(t.date)}
+                  </div>
                 </div>
-                <div className="tx-amount mono-font" style={{color: t.type === "income" ? COLORS.sage : COLORS.brick}}>
+                <div className="tx-amount mono-font" style={{color: t.type === "income" ? COLORS.sage : (t.source === "fixed" ? COLORS.blue : COLORS.brick)}}>
                   {t.type === "income" ? "+" : "−"}{brl(t.amount)}
                 </div>
-                <button className="del-btn" onClick={() => handleDelete(t.id)} aria-label="Excluir lançamento">✕</button>
+                <button
+                  className="del-btn"
+                  onClick={() => t.source === "fixed" ? handleDeleteFixed(t.id) : handleDelete(t.id)}
+                  aria-label="Excluir lançamento"
+                >✕</button>
               </div>
             );
           })
